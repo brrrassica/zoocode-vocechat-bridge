@@ -6,6 +6,7 @@
 // Reads configuration from environment variables:
 //   VOCECHAT_URL      - full VoceChat bot message endpoint
 //   VOCECHAT_API_KEY  - bot secret / API key
+const http = require('http');
 const https = require('https');
 
 const VOCECHAT_URL = process.env.VOCECHAT_URL || "https://example.com/api/v1/bot/message";
@@ -23,10 +24,13 @@ const payload = JSON.stringify({
   content: message
 });
 
+const url = new URL(VOCECHAT_URL);
+
 const options = {
   method: 'POST',
-  hostname: new URL(VOCECHAT_URL).hostname,
-  path: new URL(VOCECHAT_URL).pathname,
+  hostname: url.hostname,
+  port: url.port || undefined,
+  path: url.pathname + url.search,
   headers: {
     'Content-Type': 'application/json',
     'x-api-key': API_KEY,
@@ -34,7 +38,9 @@ const options = {
   }
 };
 
-const req = https.request(options, (res) => {
+const transport = url.protocol === 'http:' ? http : https;
+
+const req = transport.request(options, (res) => {
   res.on('data', () => {}); // drain
   res.on('end', () => {
     if (res.statusCode >= 200 && res.statusCode < 300) {

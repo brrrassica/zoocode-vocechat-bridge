@@ -1,6 +1,6 @@
 # Node Bridge — send_to_vocechat.js
 
-Zoo Code → VoceChat notification bridge (Node version). Uses only Node's built-in `https` module — no external dependencies.
+Zoo Code → VoceChat notification bridge (Node version). Uses only Node's built-in `http`/`https` modules — no external dependencies.
 
 ## Requirements
 
