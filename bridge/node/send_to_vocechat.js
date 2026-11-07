@@ -26,9 +26,15 @@ const payload = JSON.stringify({
 
 const url = new URL(VOCECHAT_URL);
 
+// URL.hostname keeps the brackets on IPv6 literals, but net.connect expects
+// the bare address (e.g. "::1" rather than "[::1]").
+const hostname = url.hostname.startsWith('[')
+  ? url.hostname.slice(1, -1)
+  : url.hostname;
+
 const options = {
   method: 'POST',
-  hostname: url.hostname,
+  hostname,
   port: url.port || undefined,
   path: url.pathname + url.search,
   headers: {
@@ -55,6 +61,10 @@ const req = transport.request(options, (res) => {
 req.on('error', (err) => {
   console.error('❌ Failed to send VoceChat notification:', err.message);
   process.exit(1);
+});
+
+req.setTimeout(10000, () => {
+  req.destroy(new Error('VoceChat request timed out'));
 });
 
 req.write(payload);
