@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VOCECHAT_URL    = os.getenv("VOCECHAT_URL", "https://example.com/api/v1/bot/message")
+VOCECHAT_URL    = os.getenv("VOCECHAT_URL", "")
 API_KEY         = os.getenv("VOCECHAT_API_KEY", "")
 REQUEST_TIMEOUT = 10
 MAX_REDIRECTS   = 5
@@ -22,6 +22,15 @@ message = sys.argv[1] if len(sys.argv) > 1 else "Zoo Code requires your attentio
 
 if not API_KEY:
     print("❌ VOCECHAT_API_KEY is not set.", file=sys.stderr)
+    sys.exit(1)
+
+if not VOCECHAT_URL:
+    print("❌ VOCECHAT_URL is not set.", file=sys.stderr)
+    sys.exit(1)
+
+url_host = (urllib.parse.urlsplit(VOCECHAT_URL).hostname or "").lower()
+if url_host == "example.com" or url_host.endswith(".example.com"):
+    print("❌ VOCECHAT_URL still points at the example.com placeholder.", file=sys.stderr)
     sys.exit(1)
 
 data = json.dumps({
@@ -40,25 +49,27 @@ def origin(url):
     return (parts.scheme.lower(), (parts.hostname or '').lower(), port)
 
 
-def make_request(url):
+def make_request(url, method='POST', data=data):
+    headers = {"x-api-key": API_KEY}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     return urllib.request.Request(
         url,
         data=data,
-        method='POST',
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": API_KEY
-        }
+        method=method,
+        headers=headers
     )
 
 
 opener = urllib.request.build_opener(NoRedirect)
 target = VOCECHAT_URL
+method = 'POST'
+body = data
 
 try:
     for _ in range(MAX_REDIRECTS + 1):
         try:
-            with opener.open(make_request(target), timeout=REQUEST_TIMEOUT) as resp:
+            with opener.open(make_request(target, method=method, data=body), timeout=REQUEST_TIMEOUT) as resp:
                 print(f"✅ VoceChat responded {resp.status}")
             break
         except urllib.error.HTTPError as e:
@@ -74,6 +85,11 @@ try:
                     file=sys.stderr,
                 )
                 sys.exit(1)
+            # 303 See Other (and legacy 301/302) is followed with a bodyless
+            # GET; 307/308 repeat the current method and body.
+            if e.code in (301, 302, 303):
+                method = 'GET'
+                body = None
             target = next_url
     else:
         print("❌ VoceChat redirect limit exceeded", file=sys.stderr)
