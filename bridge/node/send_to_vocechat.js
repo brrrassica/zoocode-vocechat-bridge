@@ -9,7 +9,7 @@
 const http = require('http');
 const https = require('https');
 
-const VOCECHAT_URL = process.env.VOCECHAT_URL || "https://example.com/api/v1/bot/message";
+const VOCECHAT_URL = process.env.VOCECHAT_URL;
 const API_KEY      = process.env.VOCECHAT_API_KEY || "";
 
 const message = process.argv[2] ?? "Zoo Code requires your attention.";
@@ -19,12 +19,23 @@ if (!API_KEY) {
   process.exit(1);
 }
 
+if (!VOCECHAT_URL) {
+  console.error('❌ VOCECHAT_URL is not set.');
+  process.exit(1);
+}
+
+const url = new URL(VOCECHAT_URL);
+const urlHostname = url.hostname.toLowerCase();
+
+if (urlHostname === 'example.com' || urlHostname.endsWith('.example.com')) {
+  console.error('❌ VOCECHAT_URL still points at the example.com placeholder.');
+  process.exit(1);
+}
+
 const payload = JSON.stringify({
   content_type: "text/markdown",
   content: message
 });
-
-const url = new URL(VOCECHAT_URL);
 
 // URL.hostname keeps the brackets on IPv6 literals, but net.connect expects
 // the bare address (e.g. "::1" rather than "[::1]").
@@ -47,13 +58,39 @@ const options = {
 const transport = url.protocol === 'http:' ? http : https;
 
 const req = transport.request(options, (res) => {
+  let settled = false;
+
+  const fail = (message) => {
+    if (settled) return;
+    settled = true;
+    console.error(message);
+    process.exit(1);
+  };
+
   res.on('data', () => {}); // drain
   res.on('end', () => {
+    if (settled) return;
+    if (!res.complete) {
+      fail('❌ VoceChat response ended before it completed.');
+      return;
+    }
+    settled = true;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       console.log(`✅ VoceChat responded ${res.statusCode}`);
     } else {
       console.error(`❌ VoceChat responded ${res.statusCode}`);
       process.exit(1);
+    }
+  });
+  res.on('error', (err) => {
+    fail(`❌ Failed to read VoceChat response: ${err.message}`);
+  });
+  res.on('aborted', () => {
+    fail('❌ VoceChat response was aborted before it completed.');
+  });
+  res.on('close', () => {
+    if (!res.complete) {
+      fail('❌ VoceChat response closed before it completed.');
     }
   });
 });
