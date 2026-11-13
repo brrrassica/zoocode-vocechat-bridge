@@ -24,8 +24,22 @@ if (!VOCECHAT_URL) {
   process.exit(1);
 }
 
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+// A trailing dot is the same absolute DNS name, so strip it (and lowercase)
+// before any host comparison.
+function normalizeHostname(hostname) {
+  return hostname.toLowerCase().replace(/\.$/, '');
+}
+
+function origin(parsedUrl) {
+  const port = parsedUrl.port || (parsedUrl.protocol === 'https:' ? '443' : '80');
+  return `${parsedUrl.protocol}//${normalizeHostname(parsedUrl.hostname)}:${port}`;
+}
+
 const url = new URL(VOCECHAT_URL);
-const urlHostname = url.hostname.toLowerCase();
+const urlHostname = normalizeHostname(url.hostname);
 
 if (urlHostname === 'example.com' || urlHostname.endsWith('.example.com')) {
   console.error('❌ VOCECHAT_URL still points at the example.com placeholder.');
@@ -37,72 +51,119 @@ const payload = JSON.stringify({
   content: message
 });
 
-// URL.hostname keeps the brackets on IPv6 literals, but net.connect expects
-// the bare address (e.g. "::1" rather than "[::1]").
-const hostname = url.hostname.startsWith('[')
-  ? url.hostname.slice(1, -1)
-  : url.hostname;
+function sendRequest(targetUrl, method, body, redirectsRemaining) {
+  // URL.hostname keeps the brackets on IPv6 literals, but net.connect expects
+  // the bare address (e.g. "::1" rather than "[::1]").
+  const hostname = targetUrl.hostname.startsWith('[')
+    ? targetUrl.hostname.slice(1, -1)
+    : targetUrl.hostname;
 
-const options = {
-  method: 'POST',
-  hostname,
-  port: url.port || undefined,
-  path: url.pathname + url.search,
-  headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': API_KEY,
-    'Content-Length': Buffer.byteLength(payload)
+  const headers = {
+    'x-api-key': API_KEY
+  };
+  if (body !== null) {
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = Buffer.byteLength(body);
   }
-};
 
-const transport = url.protocol === 'http:' ? http : https;
-
-const req = transport.request(options, (res) => {
-  let settled = false;
-
-  const fail = (message) => {
-    if (settled) return;
-    settled = true;
-    console.error(message);
-    process.exit(1);
+  const options = {
+    method,
+    hostname,
+    port: targetUrl.port || undefined,
+    path: targetUrl.pathname + targetUrl.search,
+    headers
   };
 
-  res.on('data', () => {}); // drain
-  res.on('end', () => {
-    if (settled) return;
-    if (!res.complete) {
-      fail('❌ VoceChat response ended before it completed.');
-      return;
-    }
-    settled = true;
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      console.log(`✅ VoceChat responded ${res.statusCode}`);
-    } else {
-      console.error(`❌ VoceChat responded ${res.statusCode}`);
+  const transport = targetUrl.protocol === 'http:' ? http : https;
+
+  const req = transport.request(options, (res) => {
+    let settled = false;
+
+    const fail = (message) => {
+      if (settled) return;
+      settled = true;
+      console.error(message);
       process.exit(1);
-    }
-  });
-  res.on('error', (err) => {
-    fail(`❌ Failed to read VoceChat response: ${err.message}`);
-  });
-  res.on('aborted', () => {
-    fail('❌ VoceChat response was aborted before it completed.');
-  });
-  res.on('close', () => {
-    if (!res.complete) {
-      fail('❌ VoceChat response closed before it completed.');
-    }
-  });
-});
+    };
 
-req.on('error', (err) => {
-  console.error('❌ Failed to send VoceChat notification:', err.message);
-  process.exit(1);
-});
+    res.on('data', () => {}); // drain
+    res.on('end', () => {
+      if (settled) return;
+      if (!res.complete) {
+        fail('❌ VoceChat response ended before it completed.');
+        return;
+      }
 
-req.setTimeout(10000, () => {
-  req.destroy(new Error('VoceChat request timed out'));
-});
+      const location = res.headers.location;
+      if (REDIRECT_STATUSES.has(res.statusCode) && location) {
+        if (redirectsRemaining === 0) {
+          fail('❌ VoceChat redirect limit exceeded');
+          return;
+        }
 
-req.write(payload);
-req.end();
+        let nextUrl;
+        try {
+          nextUrl = new URL(location, targetUrl);
+        } catch (err) {
+          fail(`❌ Failed to follow VoceChat redirect: ${err.message}`);
+          return;
+        }
+
+        // Never forward the API key to a different origin.
+        if (origin(nextUrl) !== origin(targetUrl)) {
+          fail(`❌ Refusing to follow VoceChat redirect to a different origin: ${nextUrl.href}`);
+          return;
+        }
+
+        // 303 See Other (and legacy 301/302) is followed with a bodyless
+        // GET; 307/308 repeat the current method and body.
+        const followWithGet = res.statusCode === 301 ||
+          res.statusCode === 302 ||
+          res.statusCode === 303;
+        settled = true;
+        sendRequest(
+          nextUrl,
+          followWithGet ? 'GET' : method,
+          followWithGet ? null : body,
+          redirectsRemaining - 1
+        );
+        return;
+      }
+
+      settled = true;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        console.log(`✅ VoceChat responded ${res.statusCode}`);
+      } else {
+        console.error(`❌ VoceChat responded ${res.statusCode}`);
+        process.exit(1);
+      }
+    });
+    res.on('error', (err) => {
+      fail(`❌ Failed to read VoceChat response: ${err.message}`);
+    });
+    res.on('aborted', () => {
+      fail('❌ VoceChat response was aborted before it completed.');
+    });
+    res.on('close', () => {
+      if (!res.complete) {
+        fail('❌ VoceChat response closed before it completed.');
+      }
+    });
+  });
+
+  req.on('error', (err) => {
+    console.error('❌ Failed to send VoceChat notification:', err.message);
+    process.exit(1);
+  });
+
+  req.setTimeout(10000, () => {
+    req.destroy(new Error('VoceChat request timed out'));
+  });
+
+  if (body !== null) {
+    req.write(body);
+  }
+  req.end();
+}
+
+sendRequest(url, 'POST', payload, MAX_REDIRECTS);

@@ -28,7 +28,13 @@ if not VOCECHAT_URL:
     print("❌ VOCECHAT_URL is not set.", file=sys.stderr)
     sys.exit(1)
 
-url_host = (urllib.parse.urlsplit(VOCECHAT_URL).hostname or "").lower()
+def normalize_host(host):
+    # A trailing dot is the same absolute DNS name, so strip it before any
+    # host comparison.
+    return (host or "").lower().rstrip(".")
+
+
+url_host = normalize_host(urllib.parse.urlsplit(VOCECHAT_URL).hostname)
 if url_host == "example.com" or url_host.endswith(".example.com"):
     print("❌ VOCECHAT_URL still points at the example.com placeholder.", file=sys.stderr)
     sys.exit(1)
@@ -46,7 +52,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def origin(url):
     parts = urllib.parse.urlsplit(url)
     port = parts.port or (443 if parts.scheme == 'https' else 80)
-    return (parts.scheme.lower(), (parts.hostname or '').lower(), port)
+    return (parts.scheme.lower(), normalize_host(parts.hostname), port)
 
 
 def make_request(url, method='POST', data=data):
@@ -70,6 +76,10 @@ try:
     for _ in range(MAX_REDIRECTS + 1):
         try:
             with opener.open(make_request(target, method=method, data=body), timeout=REQUEST_TIMEOUT) as resp:
+                # Consume the body so a truncated or reset reply raises
+                # (e.g. http.client.IncompleteRead) instead of being counted
+                # as delivered.
+                resp.read()
                 print(f"✅ VoceChat responded {resp.status}")
             break
         except urllib.error.HTTPError as e:
