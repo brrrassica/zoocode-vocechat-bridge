@@ -38,8 +38,24 @@ function origin(parsedUrl) {
   return `${parsedUrl.protocol}//${normalizeHostname(parsedUrl.hostname)}:${port}`;
 }
 
-const url = new URL(VOCECHAT_URL);
+let url;
+try {
+  url = new URL(VOCECHAT_URL);
+} catch (err) {
+  console.error(`❌ Invalid VOCECHAT_URL: ${err.message}`);
+  process.exit(1);
+}
+
+if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  console.error('❌ VOCECHAT_URL must use http or https.');
+  process.exit(1);
+}
+
 const urlHostname = normalizeHostname(url.hostname);
+if (!urlHostname) {
+  console.error('❌ VOCECHAT_URL must include a hostname.');
+  process.exit(1);
+}
 
 if (urlHostname === 'example.com' || urlHostname.endsWith('.example.com')) {
   console.error('❌ VOCECHAT_URL still points at the example.com placeholder.');

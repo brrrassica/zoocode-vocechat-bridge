@@ -30,11 +30,46 @@ if not VOCECHAT_URL:
 
 def normalize_host(host):
     # A trailing dot is the same absolute DNS name, so strip it before any
-    # host comparison.
+    # host comparison or request.
     return (host or "").lower().rstrip(".")
 
 
-url_host = normalize_host(urllib.parse.urlsplit(VOCECHAT_URL).hostname)
+def normalize_url(parts):
+    # Rebuild the URL with a normalized hostname so absolute FQDNs with a
+    # trailing dot still pass TLS hostname verification.
+    host = normalize_host(parts.hostname)
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host
+    port = parts.port
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    if parts.username is not None:
+        userinfo = parts.username
+        if parts.password is not None:
+            userinfo = f"{userinfo}:{parts.password}"
+        netloc = f"{userinfo}@{netloc}"
+    return urllib.parse.urlunsplit(
+        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+    )
+
+
+try:
+    parsed_url = urllib.parse.urlsplit(VOCECHAT_URL)
+    url_host = normalize_host(parsed_url.hostname)
+    target = normalize_url(parsed_url)
+except ValueError as e:
+    print(f"❌ Invalid VOCECHAT_URL: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if parsed_url.scheme.lower() not in ("http", "https"):
+    print("❌ VOCECHAT_URL must use http or https.", file=sys.stderr)
+    sys.exit(1)
+
+if not url_host:
+    print("❌ VOCECHAT_URL must include a hostname.", file=sys.stderr)
+    sys.exit(1)
+
 if url_host == "example.com" or url_host.endswith(".example.com"):
     print("❌ VOCECHAT_URL still points at the example.com placeholder.", file=sys.stderr)
     sys.exit(1)
@@ -68,7 +103,6 @@ def make_request(url, method='POST', data=data):
 
 
 opener = urllib.request.build_opener(NoRedirect)
-target = VOCECHAT_URL
 method = 'POST'
 body = data
 
@@ -80,14 +114,20 @@ try:
                 # (e.g. http.client.IncompleteRead) instead of being counted
                 # as delivered.
                 resp.read()
-                print(f"✅ VoceChat responded {resp.status}")
+                if resp.status is not None and 200 <= resp.status < 300:
+                    print(f"✅ VoceChat responded {resp.status}")
+                else:
+                    print(f"❌ VoceChat responded {resp.status}", file=sys.stderr)
+                    sys.exit(1)
             break
         except urllib.error.HTTPError as e:
             location = e.headers.get("Location")
             if e.code not in (301, 302, 303, 307, 308) or not location:
                 print(f"❌ VoceChat responded {e.code}: {e.reason}", file=sys.stderr)
                 sys.exit(1)
-            next_url = urllib.parse.urljoin(target, location)
+            next_url = normalize_url(
+                urllib.parse.urlsplit(urllib.parse.urljoin(target, location))
+            )
             # Never forward the API key to a different origin.
             if origin(next_url) != origin(target):
                 print(
