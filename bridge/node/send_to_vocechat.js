@@ -69,10 +69,13 @@ const payload = JSON.stringify({
 
 function sendRequest(targetUrl, method, body, redirectsRemaining) {
   // URL.hostname keeps the brackets on IPv6 literals, but net.connect expects
-  // the bare address (e.g. "::1" rather than "[::1]").
-  const hostname = targetUrl.hostname.startsWith('[')
-    ? targetUrl.hostname.slice(1, -1)
-    : targetUrl.hostname;
+  // the bare address (e.g. "::1" rather than "[::1]"). Strip a trailing dot
+  // for the same absolute DNS name so requests match normalized origin checks.
+  const hostname = normalizeHostname(
+    targetUrl.hostname.startsWith('[')
+      ? targetUrl.hostname.slice(1, -1)
+      : targetUrl.hostname
+  );
 
   const headers = {
     'x-api-key': API_KEY
@@ -89,6 +92,9 @@ function sendRequest(targetUrl, method, body, redirectsRemaining) {
     path: targetUrl.pathname + targetUrl.search,
     headers
   };
+  if (targetUrl.username || targetUrl.password) {
+    options.auth = `${decodeURIComponent(targetUrl.username)}:${decodeURIComponent(targetUrl.password)}`;
+  }
 
   const transport = targetUrl.protocol === 'http:' ? http : https;
 
