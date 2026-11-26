@@ -38,6 +38,15 @@ function origin(parsedUrl) {
   return `${parsedUrl.protocol}//${normalizeHostname(parsedUrl.hostname)}:${port}`;
 }
 
+// Redact userinfo (user:password@) so credentials embedded in a URL never
+// reach stderr/logs.
+function redactUrl(parsedUrl) {
+  const safe = new URL(parsedUrl.href);
+  safe.username = '';
+  safe.password = '';
+  return safe.href;
+}
+
 let url;
 try {
   url = new URL(VOCECHAT_URL);
@@ -93,7 +102,19 @@ function sendRequest(targetUrl, method, body, redirectsRemaining) {
     headers
   };
   if (targetUrl.username || targetUrl.password) {
-    options.auth = `${decodeURIComponent(targetUrl.username)}:${decodeURIComponent(targetUrl.password)}`;
+    // Malformed percent-encoding in userinfo (e.g. "%E0%A4%A") is accepted by
+    // `new URL` but makes decodeURIComponent throw, so fail through the
+    // controlled error path instead of crashing with an uncaught URIError.
+    let authUser;
+    let authPassword;
+    try {
+      authUser = decodeURIComponent(targetUrl.username);
+      authPassword = decodeURIComponent(targetUrl.password);
+    } catch (err) {
+      console.error(`❌ VoceChat URL userinfo is malformed: ${err.message}`);
+      process.exit(1);
+    }
+    options.auth = `${authUser}:${authPassword}`;
   }
 
   const transport = targetUrl.protocol === 'http:' ? http : https;
@@ -133,7 +154,7 @@ function sendRequest(targetUrl, method, body, redirectsRemaining) {
 
         // Never forward the API key to a different origin.
         if (origin(nextUrl) !== origin(targetUrl)) {
-          fail(`❌ Refusing to follow VoceChat redirect to a different origin: ${nextUrl.href}`);
+          fail(`❌ Refusing to follow VoceChat redirect to a different origin: ${redactUrl(nextUrl)}`);
           return;
         }
 
