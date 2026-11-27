@@ -54,6 +54,21 @@ def normalize_url(parts):
     )
 
 
+def redact_url(url):
+    # Strip userinfo so credentials embedded in a URL are not written to
+    # stderr/logs. Only for display; requests still use the original URL.
+    parts = urllib.parse.urlsplit(url)
+    host = normalize_host(parts.hostname)
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host
+    if parts.port is not None:
+        netloc = f"{netloc}:{parts.port}"
+    return urllib.parse.urlunsplit(
+        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+    )
+
+
 try:
     parsed_url = urllib.parse.urlsplit(VOCECHAT_URL)
     url_host = normalize_host(parsed_url.hostname)
@@ -131,7 +146,7 @@ try:
             # Never forward the API key to a different origin.
             if origin(next_url) != origin(target):
                 print(
-                    f"❌ Refusing to follow VoceChat redirect to a different origin: {next_url}",
+                    f"❌ Refusing to follow VoceChat redirect to a different origin: {redact_url(next_url)}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
